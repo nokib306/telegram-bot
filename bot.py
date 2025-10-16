@@ -5,6 +5,7 @@ import json
 import os
 from datetime import datetime, timedelta
 import re
+import webshare_api as webshare
 
 # Configure logging
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
@@ -15,7 +16,240 @@ TOKEN = '8327443445:AAH4qPxGvy84neGs3nAdoV1p3ebRaoAnWwc'
 
 # Admin Chat ID - YOUR ADMIN ID
 ADMIN_CHAT_ID = '8083915428'
+async def handle_admin_approve(query, context, user_id, order_id):
+    """Admin approves payment - Auto assign proxy from Webshare"""
+    
+    if user_id != '8083915428':  # Your admin ID already set!
+        await query.answer("❌ No access!", show_alert=True)
+        return
+    
+    order = orders.get(order_id)
+    if not order:
+        await query.edit_message_text('❌ Order not found')
+        return
+    
+    await query.edit_message_text('⏳ Getting proxy...')
+    
+    # Get from Webshare
+    raw_proxy = webshare.get_random_proxy()
+    
+    if not raw_proxy:
+        await query.edit_message_text(
+            '❌ *No proxies!*\n\nCheck Webshare:\n• Buy proxies\n• Verify API',
+            parse_mode='Markdown'
+        )
+        return
+    
+    proxy_details = webshare.extract_proxy_details(raw_proxy, order['proxy_type'])
+    expiry_date = datetime.now() + timedelta(hours=order['duration'])
+    
+    proxy = {
+        'proxy_id': generate_id(),
+        'order_id': order_id,
+        'type': order['proxy_type'],
+        'ip': proxy_details['ip'],
+        'port': proxy_details['port'],
+        'username': proxy_details['username'],
+        'password': proxy_details['password'],
+        'webshare_proxy_id': proxy_details['webshare_id'],
+        'expires_at': expiry_date.isoformat(),
+        'created_at': datetime.now().isoformat(),
+        'rotation_count': 0
+    }
+    
+    customer_id = order['user_id']
+    if customer_id not in proxies:
+        proxies[customer_id] = []
+    
+    proxies[customer_id].append(proxy)
+    order['status'] = 'approved'
+    order['approved_at'] = datetime.now().isoformat()
+    
+    save_proxies()
+    save_orders()
+    
+    user_message = f"""
+🎉 *Proxy Ready!*
 
+✅ Order: `{order_id}`
+🔧 Type: *{proxy['type']}*
+⏰ Valid: {expiry_date.strftime('%Y-%m-%d %H:%M')}
+
+💡 Change IP 5 times/day!
+"""
+    
+    keyboard = [
+        [InlineKeyboardButton("📋 View", callback_data=f'view_proxy_{proxy["proxy_id"]}')],
+        [InlineKeyboardButton("🔄 Change IP", callback_data=f'rotate_ip_{proxy["proxy_id"]}')]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    try:
+        await context.bot.send_message(
+            chat_id=int(customer_id), 
+            text=user_message, 
+            reply_markup=reply_markup,
+            parse_mode='Markdown'
+        )
+        
+        await query.edit_message_text(
+            f"✅ *Approved!*\n\n"
+            f"📦 `{order_id}`\n"
+            f"📍 `{proxy['ip']}`\n"
+            f"✅ Customer notified!",
+            parse_mode='Markdown'
+        )
+    except Exception as e:
+        await query.edit_message_text(f'✅ Done but notify error: {e}')
+
+
+# ========================
+# এই নতুন function যোগ করুন
+# ========================
+
+async def handle_ip_rotation(query, context, user_id, proxy_id):
+    """Handle IP rotation request"""
+    
+    user_proxies = proxies.get(user_id, [])
+    current_proxy = None
+    
+    for p in user_proxies:
+        if p['proxy_id'] == proxy_id:
+            current_proxy = p
+            break
+    
+    if not current_proxy:
+        await query.answer("❌ Not found!", show_alert=True)
+        return
+    
+    expiry_date = datetime.fromisoformat(current_proxy['expires_at'])
+    if datetime.now() > expiry_date:
+        await query.answer("❌ Expired!", show_alert=True)
+        return
+    
+    rotation_count = current_proxy.get('rotation_count', 0)
+    if rotation_count >= 5:
+        await query.answer("⚠️ Limit 5/5 reached", show_alert=True)
+        return
+    
+    await query.edit_message_text('🔄 Rotating...')
+    
+    new_raw_proxy = webshare.rotate_ip(current_proxy.get('webshare_proxy_id'))
+    
+    if not new_raw_proxy:
+        await query.answer("❌ Failed", show_alert=True)
+        return
+    
+    new_details = webshare.extract_proxy_details(new_raw_proxy, current_proxy['type'])
+    
+    current_proxy['ip'] = new_details['ip']
+    current_proxy['port'] = new_details['port']
+    current_proxy['username'] = new_details['username']
+    current_proxy['password'] = new_details['password']
+    current_proxy['webshare_proxy_id'] = new_details['webshare_id']
+    current_proxy['rotation_count'] = rotation_count + 1
+    current_proxy['last_rotated'] = datetime.now().isoformat()
+    
+    save_proxies()
+    
+    success_msg = f"""
+✅ *IP Changed!*
+
+🔄 IP: `{current_proxy['ip']}`
+🔌 Port: `{current_proxy['port']}`
+👤 User: `{current_proxy['username']}`
+🔑 Pass: `{current_proxy['password']}`
+
+📊 {current_proxy['rotation_count']}/5
+⏰ {expiry_date.strftime('%Y-%m-%d %H:%M')}
+"""
+    
+    keyboard = [
+        [InlineKeyboardButton("📋 Details", callback_data=f'view_proxy_{proxy_id}')],
+        [InlineKeyboardButton("🔄 Again", callback_data=f'rotate_ip_{proxy_id}')],
+        [InlineKeyboardButton("◀️ Back", callback_data='my_proxies')]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await query.edit_message_text(success_msg, reply_markup=reply_markup, parse_mode='Markdown')
+
+
+# ========================
+# button_callback function এ এই 2টা condition যোগ করুন
+# ========================
+
+async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    user_id = str(query.from_user.id)
+    data = query.data
+    
+    # ... আপনার existing code ...
+    
+    # এই 2টা যোগ করুন:
+    elif data.startswith('rotate_ip_'):
+        proxy_id = data.replace('rotate_ip_', '')
+        await handle_ip_rotation(query, context, user_id, proxy_id)
+    
+    elif data.startswith('admin_yes_'):
+        order_id = data.replace('admin_yes_', '')
+        await handle_admin_approve(query, context, user_id, order_id)
+
+
+# ========================
+# handle_view_proxy_details REPLACE করুন
+# ========================
+
+async def handle_view_proxy_details(query, context, user_id, proxy_id):
+    """View proxy with rotation button"""
+    
+    user_proxies = proxies.get(user_id, [])
+    proxy = None
+    
+    for p in user_proxies:
+        if p['proxy_id'] == proxy_id:
+            proxy = p
+            break
+    
+    if not proxy:
+        await query.answer("❌ Not found!", show_alert=True)
+        return
+    
+    expiry_date = datetime.fromisoformat(proxy['expires_at'])
+    is_active = expiry_date > datetime.now()
+    rotation_count = proxy.get('rotation_count', 0)
+    
+    details_message = f"""
+{'✅' if is_active else '❌'} *Proxy Details*
+
+🔧 *Type:* {proxy['type']}
+📍 *IP:* `{proxy['ip']}`
+🔌 *Port:* `{proxy['port']}`
+👤 *User:* `{proxy['username']}`
+🔑 *Pass:* `{proxy['password']}`
+
+📊 *Rotations:* {rotation_count}/5
+⏰ *Expires:* {expiry_date.strftime('%Y-%m-%d %H:%M')}
+{'🟢 Active' if is_active else '🔴 Expired'}
+
+📋 *String:*
+`{proxy['ip']}:{proxy['port']}:{proxy['username']}:{proxy['password']}`
+"""
+    
+    keyboard = []
+    
+    if is_active:
+        keyboard.append([
+            InlineKeyboardButton("🔄 Change IP", callback_data=f'rotate_ip_{proxy_id}')
+        ])
+    
+    keyboard.append([
+        InlineKeyboardButton("◀️ Back", callback_data='my_proxies')
+    ])
+    
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await query.edit_message_text(details_message, reply_markup=reply_markup, parse_mode='Markdown')
 # Payment Information
 PAYMENT_INFO = {
     'bkash': '01760935893',
