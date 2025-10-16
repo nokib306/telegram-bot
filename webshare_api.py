@@ -1,6 +1,6 @@
 """
 Webshare API Integration Module
-100% READY - Just copy paste this entire file!
+Copy this ENTIRE file as webshare_api.py
 """
 
 import requests
@@ -9,15 +9,9 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-# ========================
-# CONFIGURATION - ALL SET!
-# ========================
+# API Configuration - Already Set!
 WEBSHARE_API_KEY = "w8lbp6n0edqpmvlaru697hsdittgb0zq673cbik9"
 WEBSHARE_BASE_URL = "https://proxy.webshare.io/api/v2"
-
-# ========================
-# API FUNCTIONS
-# ========================
 
 def get_headers():
     """Get authorization headers"""
@@ -116,10 +110,17 @@ def get_proxy_count():
     proxies = fetch_all_proxies()
     return len(proxies)
 
-# Test when run directly
 if __name__ == "__main__":
-    print("Testing Webshare...")
+    print("Testing Webshare connection...")
     if test_connection():
-        print(f"✅ Working! Proxies: {get_proxy_count()}")
+        count = get_proxy_count()
+        print(f"✅ Working! Available proxies: {count}")
+        if count > 0:
+            proxy = get_random_proxy()
+            if proxy:
+                details = extract_proxy_details(proxy)
+                print(f"\nSample Proxy:")
+                print(f"IP: {details['ip']}")
+                print(f"Port: {details['port']}")
     else:
-        print("❌ Failed!")
+        print("❌ Connection failed!")
